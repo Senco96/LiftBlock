@@ -1,0 +1,1117 @@
+import { useState, useEffect } from "react";
+
+// ─── Constantes ─────────────────────────────────────────────────────────────
+
+const SEMANAS = [
+  { pct: 0.60,  repsRange: "10-12", umbral: "bajo" },
+  { pct: 0.625, repsRange: "10-12", umbral: "bajo" },
+  { pct: 0.65,  repsRange: "9-11",  umbral: "bajo" },
+  { pct: 0.675, repsRange: "9-10",  umbral: "bajo" },
+  { pct: 0.70,  repsRange: "8-9",   umbral: "medio" },
+  { pct: 0.725, repsRange: "7-8",   umbral: "medio" },
+  { pct: 0.75,  repsRange: "6-7",   umbral: "medio" },
+  { pct: 0.775, repsRange: "6",     umbral: "medio" },
+  { pct: 0.80,  repsRange: "5-6",   umbral: "alto" },
+  { pct: 0.825, repsRange: "5",     umbral: "alto" },
+  { pct: 0.85,  repsRange: "4-5",   umbral: "alto" },
+  { pct: 0.875, repsRange: "3-4",   umbral: "alto" },
+  { pct: 0.90,  repsRange: "3",     umbral: "alto" },
+  { pct: 0.925, repsRange: "2-3",   umbral: "alto" },
+  { pct: 0.95,  repsRange: "2",     umbral: "aproximacion" },
+  { pct: 1.00,  repsRange: "RM",    umbral: "rm" },
+];
+
+const EJERCICIOS_PREDEFINIDOS = [
+  "Press Banca", "Sentadilla", "Peso Muerto", "Press Militar",
+  "Hip Thrust", "Peso Muerto Rumano", "Remo con Barra", "Hack Squat",
+];
+
+const UMBRAL_COLORS = {
+  bajo:         { bar: "#3b82f6", label: "Volumen",      bg: "#0c1220" },
+  medio:        { bar: "#8b5cf6", label: "Acumulación",  bg: "#110d20" },
+  alto:         { bar: "#f97316", label: "Intensidad",   bg: "#1a0f07" },
+  aproximacion: { bar: "#eab308", label: "Aproximación", bg: "#1a1600" },
+  rm:           { bar: "#D94F3D", label: "Máximo",       bg: "#1a0a08" },
+};
+
+// ─── Helpers de cálculo ──────────────────────────────────────────────────────
+
+function redondear(kg) {
+  const bajo = Math.floor(kg / 2.5) * 2.5;
+  return (kg - bajo) >= 2.0 ? bajo + 2.5 : bajo;
+}
+
+function lbToKg(lb) {
+  return Math.round((lb / 2.205) * 10) / 10;
+}
+
+function inputAKg(valor, unidad) {
+  const n = parseFloat(valor);
+  if (isNaN(n)) return NaN;
+  return unidad === "lb" ? lbToKg(n) : n;
+}
+
+function kgToLb(kg) {
+  return Math.round(kg * 2.205 * 2) / 2; // redondear a 0.5 lb
+}
+
+function formatPeso(kg, unidad) {
+  return unidad === "lb" ? `${kgToLb(kg)} lb` : `${kg} kg`;
+}
+
+function getBackOffConfig(umbral) {
+  if (umbral === "bajo")         return { series: "3",   reps: "7-8", nota: null };
+  if (umbral === "medio")        return { series: "3",   reps: "6",   nota: null };
+  if (umbral === "alto")         return { series: "2-3", reps: "4-5", nota: "Si notas mucha fatiga acumulada, quédate en 2 series esta semana." };
+  if (umbral === "aproximacion") return { series: "2",   reps: "2-3", nota: "Semana de aproximación. Toca el peso, no te fuerces." };
+  return null;
+}
+
+function generarBloque(rmObjetivo) {
+  return SEMANAS.map((s, i) => {
+    const topKg = redondear(rmObjetivo * s.pct);
+    const backPct = s.umbral === "aproximacion" ? 0.83 : 0.86;
+    const backKg = redondear(topKg * backPct);
+    const bo = getBackOffConfig(s.umbral);
+    return {
+      semana: i + 1,
+      topSet: topKg,
+      topReps: s.repsRange,
+      backOff: bo ? backKg : null,
+      boSeries: bo ? bo.series : null,
+      boReps: bo ? bo.reps : null,
+      boNota: bo ? bo.nota : null,
+      umbral: s.umbral,
+      esRM: s.umbral === "rm",
+    };
+  });
+}
+
+function getConsejosNivel(nivel) {
+  if (nivel === "principiante") return {
+    titulo: "Principiante",
+    consejos: [
+      "Aprende el movimiento. La técnica es lo primero.",
+      "Prioriza la técnica por encima del peso en cada sesión.",
+      "Mantén los accesorios entre RIR 1–3.",
+    ],
+  };
+  if (nivel === "intermedio") return {
+    titulo: "Intermedio",
+    consejos: [
+      "Empieza a utilizar variantes del movimiento principal.",
+      "Introduce pausas ocasionales para mejorar control.",
+      "Aumenta la frecuencia del patrón de movimiento para seguir progresando.",
+    ],
+  };
+  return {
+    titulo: "Avanzado",
+    consejos: [
+      "Aumenta la frecuencia del movimiento principal.",
+      "Introduce variantes específicas: pausas, tempo, déficits, etc.",
+      "Gestiona la fatiga con más cuidado — el margen se estrecha.",
+      "Probablemente necesites más exposición al patrón para seguir progresando.",
+    ],
+  };
+}
+
+function calcularFechaFin(semanasCompletadas) {
+  const hechas = Object.values(semanasCompletadas).filter(Boolean).length;
+  const restantes = 16 - hechas;
+  const hoy = new Date();
+  const fin = new Date(hoy.getTime() + restantes * 7 * 24 * 60 * 60 * 1000);
+  return fin.toLocaleDateString("es-ES", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function calcularRecords(programaciones) {
+  const records = {};
+  programaciones.forEach(prog => {
+    const hechas = Object.values(prog.semanasCompletadas || {}).filter(Boolean).length;
+    if (hechas < 16) return; // solo bloques completados
+    const ej = prog.ejercicio;
+    if (!records[ej] || prog.objetivo > records[ej].objetivo) {
+      records[ej] = { objetivo: prog.objetivo, fecha: prog.fechaCreacion };
+    }
+  });
+  return records;
+}
+
+// ─── Storage ─────────────────────────────────────────────────────────────────
+
+const memStore = { data: [], unidad: "kg" };
+
+function cargarProgramaciones() {
+  try {
+    const raw = localStorage.getItem("liftBlock_v1");
+    return raw ? JSON.parse(raw) : memStore.data;
+  } catch { return memStore.data; }
+}
+
+function guardarProgramaciones(lista) {
+  memStore.data = lista;
+  try { localStorage.setItem("liftBlock_v1", JSON.stringify(lista)); } catch {}
+}
+
+function cargarUnidad() {
+  try { return localStorage.getItem("liftBlock_unidad") || memStore.unidad; } catch { return "kg"; }
+}
+
+function guardarUnidad(u) {
+  memStore.unidad = u;
+  try { localStorage.setItem("liftBlock_unidad", u); } catch {}
+}
+
+// ─── App ─────────────────────────────────────────────────────────────────────
+
+export default function App() {
+  const [vista, setVista] = useState("form");
+  const [rm, setRm] = useState("");        // valor en la unidad activa del usuario
+  const [objetivo, setObjetivo] = useState(""); // valor en la unidad activa del usuario
+  const [ejercicio, setEjercicio] = useState("Press Banca");
+  const [ejercicioCustom, setEjercicioCustom] = useState("");
+  const [usarCustom, setUsarCustom] = useState(false);
+  const [nivel, setNivel] = useState("intermedio");
+  const [bloque, setBloque] = useState(null);
+  const [progId, setProgId] = useState(null);
+  const [semanasCompletadas, setSemanasCompletadas] = useState({});
+  const [notasSemanas, setNotasSemanas] = useState({});
+  const [error, setError] = useState("");
+  const [expandida, setExpandida] = useState(null);
+  const [programaciones, setProgramaciones] = useState([]);
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const [mostrarEstimador, setMostrarEstimador] = useState(false);
+  const [estPeso, setEstPeso] = useState("");
+  const [estReps, setEstReps] = useState("");
+  const [estResultado, setEstResultado] = useState(null);
+  const [unidad, setUnidad] = useState("kg");
+  const [ordenPlanes, setOrdenPlanes] = useState("recientes");
+  const [tabGuardadas, setTabGuardadas] = useState("planes"); // "planes" | "records"
+
+  useEffect(() => {
+    setProgramaciones(cargarProgramaciones());
+    setUnidad(cargarUnidad());
+  }, []);
+
+  function toggleUnidad() {
+    const nueva = unidad === "kg" ? "lb" : "kg";
+    setUnidad(nueva);
+    guardarUnidad(nueva);
+  }
+
+  const ejercicioActivo = usarCustom ? ejercicioCustom.trim() : ejercicio;
+
+  const inputStyle = {
+    width: "100%", padding: "11px 14px",
+    background: "#18191b", border: "1px solid #2e2e35",
+    borderRadius: "8px", color: "#E8E6E1", fontSize: "15px",
+    marginTop: "6px", boxSizing: "border-box", outline: "none",
+    appearance: "none", WebkitAppearance: "none",
+  };
+  const labelStyle = {
+    fontSize: "10px", letterSpacing: "0.12em",
+    textTransform: "uppercase", color: "#5a5f6b", fontWeight: "600",
+  };
+
+  function calcularEstimado() {
+    const p = parseFloat(estPeso);
+    const r = parseInt(estReps);
+    if (!p || p <= 0 || !r || r < 1 || r > 12) return;
+    setEstResultado(Math.round(p * (36 / (37 - r))));
+  }
+
+  function usarEstimado() {
+    if (estResultado) {
+      setRm(String(estResultado)); // estResultado ya está en la unidad activa
+      setMostrarEstimador(false);
+      setEstPeso(""); setEstReps(""); setEstResultado(null);
+    }
+  }
+
+  function generar() {
+    const rmNum = inputAKg(rm, unidad);
+    const objNum = inputAKg(objetivo, unidad);
+    const ejNombre = ejercicioActivo;
+    if (!ejNombre) { setError("Introduce el nombre del ejercicio."); return; }
+    if (!rm || isNaN(rmNum) || rmNum <= 0) { setError("Introduce un 1RM actual válido."); return; }
+    if (!objetivo || isNaN(objNum) || objNum <= rmNum) { setError("El objetivo debe ser mayor que tu 1RM actual."); return; }
+    if (objNum - rmNum > 21) { setError("El objetivo no puede superar +21 kg sobre tu 1RM actual."); return; }
+    setError("");
+    const nuevoProg = {
+      id: Date.now(),
+      ejercicio: ejNombre, rm: rmNum, objetivo: objNum, nivel,
+      fechaCreacion: new Date().toLocaleDateString("es-ES"),
+      bloque: generarBloque(objNum),
+      semanasCompletadas: {},
+      notasSemanas: {},
+    };
+    const lista = [nuevoProg, ...cargarProgramaciones()];
+    guardarProgramaciones(lista);
+    setProgramaciones(lista);
+    setBloque(nuevoProg.bloque);
+    setProgId(nuevoProg.id);
+    setSemanasCompletadas({});
+    setNotasSemanas({});
+    setExpandida(null);
+    setVista("bloque");
+  }
+
+  function abrirProgramacion(prog) {
+    const esPredefinido = EJERCICIOS_PREDEFINIDOS.includes(prog.ejercicio);
+    setUsarCustom(!esPredefinido);
+    if (esPredefinido) { setEjercicio(prog.ejercicio); setEjercicioCustom(""); }
+    else { setEjercicioCustom(prog.ejercicio); }
+    setRm(String(unidad === "lb" ? kgToLb(prog.rm) : prog.rm));
+    setObjetivo(String(unidad === "lb" ? kgToLb(prog.objetivo) : prog.objetivo));
+    setNivel(prog.nivel);
+    setBloque(prog.bloque);
+    setProgId(prog.id);
+    setSemanasCompletadas(prog.semanasCompletadas || {});
+    setNotasSemanas(prog.notasSemanas || {});
+    setExpandida(null);
+    setVista("bloque");
+  }
+
+  function toggleSemana(numSemana) {
+    const nuevas = { ...semanasCompletadas, [numSemana]: !semanasCompletadas[numSemana] };
+    setSemanasCompletadas(nuevas);
+    if (progId) {
+      const lista = cargarProgramaciones().map(p =>
+        p.id === progId ? { ...p, semanasCompletadas: nuevas } : p
+      );
+      guardarProgramaciones(lista); setProgramaciones(lista);
+    }
+  }
+
+  function guardarNota(numSemana, texto) {
+    const nuevas = { ...notasSemanas, [numSemana]: texto };
+    setNotasSemanas(nuevas);
+    if (progId) {
+      const lista = cargarProgramaciones().map(p =>
+        p.id === progId ? { ...p, notasSemanas: nuevas } : p
+      );
+      guardarProgramaciones(lista); setProgramaciones(lista);
+    }
+  }
+
+  function eliminarProgramacion(id) {
+    const lista = cargarProgramaciones().filter(p => p.id !== id);
+    guardarProgramaciones(lista); setProgramaciones(lista); setConfirmDelete(null);
+    if (progId === id) { setVista("guardadas"); setBloque(null); setProgId(null); }
+  }
+
+  function reset() {
+    setBloque(null); setRm(""); setObjetivo(""); setError("");
+    setSemanasCompletadas({}); setNotasSemanas({}); setProgId(null); setExpandida(null); setVista("form");
+  }
+
+  const completadas = Object.values(semanasCompletadas).filter(Boolean).length;
+  const totalSemanas = bloque ? bloque.length : 16;
+
+  // Planes ordenados
+  function planesOrdenados() {
+    const lista = [...programaciones];
+    if (ordenPlanes === "recientes") return lista; // ya vienen ordenados por id desc
+    if (ordenPlanes === "progreso") {
+      return lista.sort((a, b) => {
+        const ha = Object.values(a.semanasCompletadas || {}).filter(Boolean).length;
+        const hb = Object.values(b.semanasCompletadas || {}).filter(Boolean).length;
+        const aEnProgreso = ha > 0 && ha < 16 ? 1 : 0;
+        const bEnProgreso = hb > 0 && hb < 16 ? 1 : 0;
+        return bEnProgreso - aEnProgreso;
+      });
+    }
+    if (ordenPlanes === "completados") {
+      return lista.sort((a, b) => {
+        const ha = Object.values(a.semanasCompletadas || {}).filter(Boolean).length;
+        const hb = Object.values(b.semanasCompletadas || {}).filter(Boolean).length;
+        return (hb === 16 ? 1 : 0) - (ha === 16 ? 1 : 0);
+      });
+    }
+    return lista;
+  }
+
+  const records = calcularRecords(programaciones);
+
+  // ─── Render ───────────────────────────────────────────────────────────────
+  return (
+    <div style={{
+      minHeight: "100vh", background: "#111213", color: "#E8E6E1",
+      fontFamily: "'Inter', system-ui, sans-serif",
+      maxWidth: "480px", margin: "0 auto", paddingBottom: "80px",
+    }}>
+
+      {/* ── HEADER ── */}
+      <div style={{
+        padding: "16px 20px", borderBottom: "1px solid #1e1f22",
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        position: "sticky", top: 0, background: "#111213", zIndex: 10,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <div style={{
+            width: "32px", height: "32px", background: "#D94F3D",
+            borderRadius: "8px", display: "flex", alignItems: "center",
+            justifyContent: "center", fontSize: "16px", flexShrink: 0,
+          }}>🏋️</div>
+          <div>
+            <div style={{ fontSize: "16px", fontWeight: "800", letterSpacing: "-0.02em", lineHeight: 1 }}>
+              LiftBlock
+            </div>
+            <div style={{ color: "#3a3b3e", fontSize: "10px", marginTop: "2px" }}>
+              16 semanas · top set + series de trabajo
+            </div>
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          {/* Toggle kg/lb */}
+          <button onClick={toggleUnidad} style={{
+            background: "#1a1b1d", border: "1px solid #2e2e35",
+            borderRadius: "7px", padding: "6px 10px",
+            color: "#9ca3af", fontSize: "11px", fontWeight: "700",
+            cursor: "pointer", letterSpacing: "0.05em",
+          }}>
+            {unidad === "kg" ? "kg" : "lb"}
+          </button>
+          {/* Mis planes */}
+          <button
+            onClick={() => setVista(vista === "guardadas" ? (bloque ? "bloque" : "form") : "guardadas")}
+            style={{
+              background: vista === "guardadas" ? "#D94F3D" : "#1a1b1d",
+              border: "none", borderRadius: "8px", padding: "7px 11px",
+              color: vista === "guardadas" ? "white" : "#6b7280",
+              fontSize: "12px", fontWeight: "600", cursor: "pointer",
+              display: "flex", alignItems: "center", gap: "5px",
+            }}
+          >
+            📋
+            {programaciones.length > 0 && vista !== "guardadas" && (
+              <span style={{
+                background: "#D94F3D", color: "white",
+                borderRadius: "10px", padding: "0px 5px", fontSize: "10px", fontWeight: "800",
+              }}>{programaciones.length}</span>
+            )}
+            <span>Mis planes</span>
+          </button>
+        </div>
+      </div>
+
+      {/* ── VISTA: GUARDADAS ── */}
+      {vista === "guardadas" && (
+        <div style={{ padding: "20px" }}>
+
+          {/* Tabs: Planes / Récords */}
+          <div style={{ display: "flex", gap: "6px", marginBottom: "18px" }}>
+            {[["planes", "Mis planes"], ["records", "Récords"]].map(([key, label]) => (
+              <button key={key} onClick={() => setTabGuardadas(key)} style={{
+                flex: 1, padding: "9px",
+                background: tabGuardadas === key ? "#D94F3D" : "#1a1b1d",
+                border: `1px solid ${tabGuardadas === key ? "#D94F3D" : "#2e2e35"}`,
+                borderRadius: "8px",
+                color: tabGuardadas === key ? "white" : "#6b7280",
+                fontSize: "13px", fontWeight: "700", cursor: "pointer",
+              }}>{label}</button>
+            ))}
+          </div>
+
+          {/* TAB: PLANES */}
+          {tabGuardadas === "planes" && (
+            <>
+              {/* Ordenar */}
+              {programaciones.length > 1 && (
+                <div style={{ marginBottom: "14px" }}>
+                  <select
+                    value={ordenPlanes}
+                    onChange={e => setOrdenPlanes(e.target.value)}
+                    style={{ ...inputStyle, marginTop: 0, fontSize: "12px", padding: "8px 12px", color: "#9ca3af" }}
+                  >
+                    <option value="recientes">Más recientes primero</option>
+                    <option value="progreso">En progreso primero</option>
+                    <option value="completados">Completados primero</option>
+                  </select>
+                </div>
+              )}
+
+              <div style={{ fontSize: "12px", color: "#3a3b3e", marginBottom: "12px" }}>
+                {programaciones.length === 0
+                  ? "Aún no tienes ningún plan guardado."
+                  : `${programaciones.length} plan${programaciones.length > 1 ? "es" : ""} guardado${programaciones.length > 1 ? "s" : ""}`}
+              </div>
+
+              {planesOrdenados().map(prog => {
+                const hechas = Object.values(prog.semanasCompletadas || {}).filter(Boolean).length;
+                const pct = Math.round((hechas / 16) * 100);
+                const completado = hechas === 16;
+                return (
+                  <div key={prog.id} style={{
+                    background: "#161718",
+                    border: `1px solid ${completado ? "#1a3a1a" : "#1e1f22"}`,
+                    borderLeft: `3px solid ${completado ? "#22c55e" : "#D94F3D"}`,
+                    borderRadius: "10px", padding: "14px", marginBottom: "8px",
+                  }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: "700", fontSize: "14px" }}>{prog.ejercicio}</div>
+                        <div style={{ color: "#4b5563", fontSize: "11px", marginTop: "2px" }}>
+                          {formatPeso(prog.rm, unidad)} → {formatPeso(prog.objetivo, unidad)} · {prog.fechaCreacion}
+                        </div>
+                        {completado && (
+                          <div style={{ fontSize: "11px", color: "#4ade80", marginTop: "4px" }}>✓ Completado</div>
+                        )}
+                        <div style={{ marginTop: "10px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10px", color: "#4b5563", marginBottom: "3px" }}>
+                            <span>{hechas} / 16 semanas</span>
+                            <span>{pct}%</span>
+                          </div>
+                          <div style={{ height: "4px", background: "#222", borderRadius: "2px" }}>
+                            <div style={{
+                              height: "100%", borderRadius: "2px",
+                              background: completado ? "#22c55e" : "#D94F3D",
+                              width: `${pct}%`, transition: "width 0.3s",
+                            }} />
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: "6px", marginLeft: "10px", flexShrink: 0 }}>
+                        <button onClick={() => abrirProgramacion(prog)} style={{
+                          background: "#D94F3D", border: "none", borderRadius: "7px",
+                          padding: "7px 11px", color: "white", fontSize: "12px",
+                          fontWeight: "700", cursor: "pointer",
+                        }}>Ver</button>
+                        <button onClick={() => setConfirmDelete(prog.id)} style={{
+                          background: "#1e1f22", border: "none", borderRadius: "7px",
+                          padding: "7px 9px", color: "#6b7280", fontSize: "13px", cursor: "pointer",
+                        }}>🗑️</button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </>
+          )}
+
+          {/* TAB: RÉCORDS */}
+          {tabGuardadas === "records" && (
+            <>
+              {Object.keys(records).length === 0 ? (
+                <div style={{ fontSize: "13px", color: "#3a3b3e", lineHeight: "1.6" }}>
+                  Aún no tienes récords. Los récords se registran cuando completas las 16 semanas de un bloque.
+                </div>
+              ) : (
+                Object.entries(records)
+                  .sort((a, b) => b[1].objetivo - a[1].objetivo)
+                  .map(([ej, rec]) => (
+                    <div key={ej} style={{
+                      background: "#161718", border: "1px solid #1e1f22",
+                      borderLeft: "3px solid #eab308",
+                      borderRadius: "10px", padding: "14px", marginBottom: "8px",
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
+                    }}>
+                      <div>
+                        <div style={{ fontWeight: "700", fontSize: "14px" }}>{ej}</div>
+                        <div style={{ color: "#4b5563", fontSize: "11px", marginTop: "2px" }}>
+                          Mejor marca · {rec.fecha}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: "22px", fontWeight: "800", color: "#eab308" }}>
+                        {formatPeso(rec.objetivo, unidad)}
+                      </div>
+                    </div>
+                  ))
+              )}
+            </>
+          )}
+
+          {/* Modal confirmación borrado */}
+          {confirmDelete && (
+            <div style={{
+              position: "fixed", inset: 0, background: "#000000cc",
+              display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100,
+            }}>
+              <div style={{
+                background: "#1a1b1d", border: "1px solid #2e2e35",
+                borderRadius: "12px", padding: "22px", maxWidth: "290px", width: "90%",
+              }}>
+                <div style={{ fontWeight: "700", marginBottom: "6px" }}>¿Eliminar este plan?</div>
+                <div style={{ color: "#6b7280", fontSize: "12px", marginBottom: "18px" }}>
+                  Se borrarán todas las semanas completadas. No se puede deshacer.
+                </div>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <button onClick={() => setConfirmDelete(null)} style={{
+                    flex: 1, padding: "10px", background: "#222", border: "none",
+                    borderRadius: "8px", color: "#9ca3af", cursor: "pointer", fontSize: "13px",
+                  }}>Cancelar</button>
+                  <button onClick={() => eliminarProgramacion(confirmDelete)} style={{
+                    flex: 1, padding: "10px", background: "#D94F3D", border: "none",
+                    borderRadius: "8px", color: "white", fontWeight: "700", cursor: "pointer", fontSize: "13px",
+                  }}>Eliminar</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <button onClick={() => setVista("form")} style={{
+            marginTop: "16px", width: "100%", padding: "13px",
+            background: "#D94F3D", border: "none", borderRadius: "10px",
+            color: "white", fontWeight: "800", fontSize: "14px", cursor: "pointer",
+          }}>
+            + Nuevo plan
+          </button>
+        </div>
+      )}
+
+      {/* ── VISTA: FORMULARIO ── */}
+      {vista === "form" && (
+        <div style={{ padding: "20px" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+
+            {/* Ejercicio */}
+            <div>
+              <label style={labelStyle}>Ejercicio</label>
+              {!usarCustom ? (
+                <select value={ejercicio} onChange={e => setEjercicio(e.target.value)}
+                  style={{ ...inputStyle, cursor: "pointer" }}>
+                  {EJERCICIOS_PREDEFINIDOS.map(ej => <option key={ej} value={ej}>{ej}</option>)}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  placeholder="Nombre del ejercicio"
+                  value={ejercicioCustom}
+                  onChange={e => setEjercicioCustom(e.target.value)}
+                  style={inputStyle}
+                />
+              )}
+              <button
+                onClick={() => { setUsarCustom(!usarCustom); setEjercicioCustom(""); }}
+                style={{
+                  marginTop: "6px", fontSize: "11px", background: "none", border: "none",
+                  color: usarCustom ? "#6b7280" : "#D94F3D", cursor: "pointer", padding: 0,
+                  fontWeight: "600",
+                }}
+              >
+                {usarCustom ? "← Usar lista predefinida" : "+ Ejercicio personalizado"}
+              </button>
+            </div>
+
+            {/* 1RM */}
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <label style={labelStyle}>1RM Actual ({unidad})</label>
+                <button onClick={() => { setMostrarEstimador(!mostrarEstimador); setEstResultado(null); }}
+                  style={{
+                    fontSize: "11px", color: mostrarEstimador ? "#D94F3D" : "#6b7280",
+                    background: "none", border: "none", cursor: "pointer", padding: 0, fontWeight: "600",
+                  }}>
+                  {mostrarEstimador ? "✕ Cerrar" : "No sé mi 1RM →"}
+                </button>
+              </div>
+              <input type="text" inputMode="decimal" placeholder="100"
+                value={rm}
+                onChange={e => setRm(e.target.value)} style={inputStyle} />
+
+              {mostrarEstimador && (
+                <div style={{
+                  marginTop: "10px", padding: "14px",
+                  background: "#16171a", border: "1px solid #2e2e35", borderRadius: "10px",
+                }}>
+                  <div style={{ fontSize: "12px", color: "#9ca3af", marginBottom: "12px", lineHeight: "1.5" }}>
+                    Mete un peso con el que puedas hacer entre 2 y 10 reps con buena técnica.
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "10px" }}>
+                    <div>
+                      <label style={labelStyle}>Peso ({unidad})</label>
+                      <input type="text" inputMode="decimal" placeholder="80" value={estPeso}
+                        onChange={e => { setEstPeso(e.target.value); setEstResultado(null); }}
+                        style={{ ...inputStyle, fontSize: "14px" }} />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Repeticiones</label>
+                      <input type="number" placeholder="6" min="1" max="12" value={estReps}
+                        onChange={e => { setEstReps(e.target.value); setEstResultado(null); }}
+                        style={{ ...inputStyle, fontSize: "14px" }} />
+                    </div>
+                  </div>
+                  <button onClick={calcularEstimado} style={{
+                    width: "100%", padding: "10px", background: "#222", border: "1px solid #333",
+                    borderRadius: "8px", color: "#E8E6E1", fontSize: "13px", fontWeight: "700", cursor: "pointer",
+                  }}>Calcular estimación</button>
+                  {estResultado && (
+                    <div style={{
+                      marginTop: "12px", padding: "14px", background: "#0d1a0d",
+                      border: "1px solid #22c55e44", borderRadius: "8px", textAlign: "center",
+                    }}>
+                      <div style={{ fontSize: "10px", color: "#5a5f6b", marginBottom: "4px", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                        1RM estimado
+                      </div>
+                      <div style={{ fontSize: "28px", fontWeight: "800", color: "#4ade80" }}>{estResultado} {unidad}</div>
+                      <div style={{ fontSize: "11px", color: "#5a5f6b", margin: "4px 0 12px" }}>
+                        Aproximación. Puede variar según el día y la técnica.
+                      </div>
+                      <button onClick={usarEstimado} style={{
+                        width: "100%", padding: "10px", background: "#22c55e", border: "none",
+                        borderRadius: "7px", color: "white", fontSize: "13px", fontWeight: "800", cursor: "pointer",
+                      }}>Usar este valor →</button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Objetivo */}
+            <div>
+              <label style={labelStyle}>Objetivo ({unidad})</label>
+              <input type="text" inputMode="decimal"
+                placeholder={rm ? String(parseFloat(rm) + (unidad === "lb" ? 11 : 5)) : (unidad === "lb" ? "220" : "105")}
+                value={objetivo}
+                onChange={e => setObjetivo(e.target.value)} style={inputStyle} />
+              <div style={{ fontSize: "11px", color: "#3a3b3e", marginTop: "5px" }}>
+                Introduce el valor en {unidad}. Máximo +20 kg por bloque.
+              </div>
+              {objetivo && rm && (() => { const diff = inputAKg(objetivo, unidad) - inputAKg(rm, unidad); return diff > 10 && diff <= 21; })() && (
+                <div style={{
+                  marginTop: "8px", padding: "9px 12px",
+                  background: "#1a1500", border: "1px solid #eab30833",
+                  borderRadius: "7px", fontSize: "12px", color: "#d97706", lineHeight: "1.5",
+                }}>
+                  ⚠️ Por encima de +10 kg el riesgo de acumular fatiga excesiva aumenta. Recomendamos no superar ese margen salvo que tengas experiencia gestionando bloques largos.
+                </div>
+              )}
+            </div>
+
+            {/* Nivel */}
+            <div>
+              <label style={labelStyle}>Nivel</label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "7px", marginTop: "6px" }}>
+                {["principiante", "intermedio", "avanzado"].map(n => (
+                  <button key={n} onClick={() => setNivel(n)} style={{
+                    padding: "10px 4px",
+                    background: nivel === n ? "#D94F3D" : "#18191b",
+                    border: `1px solid ${nivel === n ? "#D94F3D" : "#2e2e35"}`,
+                    borderRadius: "8px",
+                    color: nivel === n ? "white" : "#6b7280",
+                    fontSize: "12px", fontWeight: nivel === n ? "700" : "400",
+                    cursor: "pointer",
+                  }}>
+                    {n.charAt(0).toUpperCase() + n.slice(1)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {error && (
+            <div style={{
+              marginTop: "14px", padding: "11px 13px", background: "#2a1515",
+              color: "#f87171", borderRadius: "8px", fontSize: "13px", border: "1px solid #3d1515",
+            }}>{error}</div>
+          )}
+
+          {/* Disclaimer legal */}
+          <div style={{
+            marginTop: "20px", padding: "12px 14px", background: "#16171a",
+            border: "1px solid #1e1f22", borderRadius: "8px",
+            fontSize: "11px", color: "#4b5563", lineHeight: "1.6",
+          }}>
+            Esta herramienta tiene carácter informativo y no sustituye el criterio de un profesional del deporte o la salud. Está diseñada para ejercicios con carga cuantificable: peso libre, máquinas y movimientos en los que puedas registrar un peso objetivo. El uso es bajo tu propia responsabilidad.
+          </div>
+
+          <button onClick={generar} style={{
+            marginTop: "14px", width: "100%", padding: "15px",
+            background: "#D94F3D", color: "white", border: "none",
+            borderRadius: "10px", fontWeight: "800", fontSize: "15px", cursor: "pointer",
+          }}>
+            Generar progresión →
+          </button>
+
+          {/* Leyenda fases */}
+          <div style={{
+            marginTop: "24px", padding: "14px", background: "#16171a",
+            borderRadius: "10px", border: "1px solid #1e1f22",
+          }}>
+            <div style={{ fontSize: "10px", letterSpacing: "0.12em", textTransform: "uppercase", color: "#5a5f6b", marginBottom: "10px" }}>
+              Fases del bloque
+            </div>
+            {Object.entries(UMBRAL_COLORS).map(([k, v]) => (
+              <div key={k} style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "7px" }}>
+                <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: v.bar, flexShrink: 0 }} />
+                <span style={{ fontSize: "12px", color: "#6b7280" }}>{v.label}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Nota accesorios */}
+          <div style={{
+            marginTop: "10px", padding: "14px", background: "#16171a",
+            borderRadius: "10px", border: "1px solid #1e1f22",
+          }}>
+            <div style={{ fontSize: "10px", letterSpacing: "0.12em", textTransform: "uppercase", color: "#5a5f6b", marginBottom: "8px" }}>
+              Ejercicios accesorios
+            </div>
+            <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: "1.6" }}>
+              Esta herramienta programa únicamente el movimiento principal. Para los accesorios, mantén suficiente volumen para apoyar ese movimiento (aprox. 12–19 series semanales por grupo muscular) y deja unas 2 repeticiones en reserva en la mayoría de series.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── VISTA: BLOQUE ── */}
+      {vista === "bloque" && bloque && (
+        <div style={{ padding: "20px" }}>
+
+          {/* Cabecera */}
+          <div style={{
+            background: "#161718", border: "1px solid #2a2a2a",
+            borderRadius: "12px", padding: "16px", marginBottom: "14px",
+          }}>
+            <div style={{ fontSize: "10px", letterSpacing: "0.12em", textTransform: "uppercase", color: "#4b5563", marginBottom: "4px" }}>
+              {ejercicioActivo} · {nivel}
+            </div>
+            <div style={{ display: "flex", alignItems: "baseline", gap: "8px" }}>
+              <span style={{ fontSize: "22px", fontWeight: "800" }}>{formatPeso((parseFloat(rm) || 0), unidad)}</span>
+              <span style={{ color: "#D94F3D", fontWeight: "700", fontSize: "14px" }}>→</span>
+              <span style={{ fontSize: "22px", fontWeight: "800", color: "#D94F3D" }}>{formatPeso((parseFloat(objetivo) || 0), unidad)}</span>
+            </div>
+            <div style={{ marginTop: "10px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10px", color: "#4b5563", marginBottom: "4px" }}>
+                <span>{completadas} de {totalSemanas} semanas</span>
+                <span>{Math.round((completadas / totalSemanas) * 100)}%</span>
+              </div>
+              <div style={{ height: "5px", background: "#222", borderRadius: "3px" }}>
+                <div style={{
+                  height: "100%", borderRadius: "3px",
+                  background: completadas === totalSemanas ? "#22c55e" : "#D94F3D",
+                  width: `${(completadas / totalSemanas) * 100}%`, transition: "width 0.3s",
+                }} />
+              </div>
+            </div>
+            {/* Fecha estimada de finalización */}
+            {completadas < totalSemanas && (
+              <div style={{ marginTop: "10px", fontSize: "11px", color: "#4b5563" }}>
+                Finalización estimada: <span style={{ color: "#9ca3af", fontWeight: "600" }}>{calcularFechaFin(semanasCompletadas)}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Semanas */}
+          {bloque.map((semana) => {
+            const col = UMBRAL_COLORS[semana.umbral] || UMBRAL_COLORS.bajo;
+            const abierta = expandida === semana.semana;
+            const hecha = !!semanasCompletadas[semana.semana];
+
+            return (
+              <div key={semana.semana} style={{
+                background: hecha ? "#0d1a0d" : (abierta ? col.bg : "#131415"),
+                border: `1px solid ${hecha ? "#1a3a1a" : (abierta ? col.bar + "55" : "#1e1f22")}`,
+                borderLeft: `3px solid ${hecha ? "#22c55e" : col.bar}`,
+                borderRadius: "8px", marginBottom: "5px", overflow: "hidden",
+              }}>
+                <div
+                  onClick={() => setExpandida(abierta ? null : semana.semana)}
+                  style={{
+                    display: "flex", justifyContent: "space-between", alignItems: "center",
+                    padding: "12px 14px", cursor: "pointer",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                    <button
+                      onClick={e => { e.stopPropagation(); toggleSemana(semana.semana); }}
+                      style={{
+                        width: "26px", height: "26px", borderRadius: "50%", flexShrink: 0,
+                        border: `2px solid ${hecha ? "#22c55e" : col.bar + "88"}`,
+                        background: hecha ? "#22c55e" : "transparent",
+                        color: hecha ? "white" : col.bar,
+                        fontSize: hecha ? "13px" : "11px",
+                        fontWeight: "700", cursor: "pointer",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        padding: 0,
+                      }}
+                    >
+                      {hecha ? "✓" : semana.semana}
+                    </button>
+                    <div>
+                      <span style={{ fontSize: "12px", color: hecha ? "#4ade80" : "#5a5f6b" }}>
+                        {hecha ? "Completada" : col.label}
+                      </span>
+                      {notasSemanas[semana.semana] && (
+                        <span style={{ fontSize: "10px", color: "#4b5563", marginLeft: "6px" }}>· 📝</span>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: "6px" }}>
+                    <span style={{
+                      fontSize: "19px", fontWeight: "800",
+                      color: hecha ? "#4ade80" : "#E8E6E1",
+                      textDecoration: hecha ? "line-through" : "none",
+                      opacity: hecha ? 0.5 : 1,
+                    }}>
+                      {formatPeso(semana.topSet, unidad)}
+                    </span>
+                    {!hecha && (
+                      <span style={{ fontSize: "11px", color: "#3a3b3e" }}>{abierta ? "▲" : "▼"}</span>
+                    )}
+                    {hecha && (
+                      <span style={{ fontSize: "11px", color: "#1a3a1a" }}>{abierta ? "▲" : "▼"}</span>
+                    )}
+                  </div>
+                </div>
+
+                {abierta && (
+                  <div style={{ padding: "0 14px 14px", borderTop: `1px solid ${hecha ? "#1a3a1a" : col.bar + "22"}` }}>
+                    {hecha ? (
+                      /* Semana completada: solo notas */
+                      <div style={{ paddingTop: "13px" }}>
+                        <div style={{ fontSize: "10px", color: "#5a5f6b", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: "5px" }}>
+                          Notas
+                        </div>
+                        <textarea
+                          placeholder="Sin notas..."
+                          value={notasSemanas[semana.semana] || ""}
+                          onChange={e => guardarNota(semana.semana, e.target.value)}
+                          rows={3}
+                          style={{
+                            width: "100%", padding: "10px 12px",
+                            background: "#0a130a", border: "1px solid #1a3a1a",
+                            borderRadius: "8px", color: "#9ca3af",
+                            fontSize: "13px", lineHeight: "1.5",
+                            resize: "none", outline: "none",
+                            boxSizing: "border-box", fontFamily: "inherit",
+                            caretColor: "#4ade80",
+                          }}
+                        />
+                      </div>
+                    ) : semana.backOff ? (
+                      <>
+                        <div style={{ paddingTop: "13px", marginBottom: "13px" }}>
+                          <div style={{ fontSize: "10px", color: "#5a5f6b", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: "5px" }}>
+                            Top set
+                          </div>
+                          <div style={{ fontSize: "20px", fontWeight: "800" }}>
+                            {formatPeso(semana.topSet, unidad)} × {semana.topReps}
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "4px", lineHeight: "1.5" }}>
+                            El rango es orientativo. Trabaja entre RIR 0 y RIR 2 (RIR: repeticiones en recámara).
+                          </div>
+                        </div>
+
+                        <div style={{ marginBottom: "13px" }}>
+                          <div style={{ fontSize: "10px", color: "#5a5f6b", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: "5px" }}>
+                            Series de trabajo
+                          </div>
+                          <div style={{ fontSize: "20px", fontWeight: "800" }}>
+                            {formatPeso(semana.backOff, unidad)} · {semana.boSeries} × {semana.boReps}
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "4px", lineHeight: "1.5" }}>
+                            Mismo criterio. Sin llegar al fallo.
+                          </div>
+                        </div>
+
+                        <div style={{
+                          display: "flex", alignItems: "center", gap: "9px",
+                          padding: "9px 11px", background: "#1a1b1d", borderRadius: "6px",
+                        }}>
+                          <span style={{ fontSize: "14px" }}>⏱️</span>
+                          <span style={{ fontSize: "12px", color: "#9ca3af", lineHeight: "1.5" }}>
+                            Descansa <strong style={{ color: "#E8E6E1" }}>3–5 minutos</strong> entre series.
+                          </span>
+                        </div>
+
+                        {(semana.umbral === "alto" || semana.umbral === "aproximacion") && (
+                          <div style={{
+                            marginTop: "9px", padding: "9px 11px",
+                            background: "#1a1500", border: "1px solid #eab30833",
+                            borderRadius: "6px", fontSize: "12px", color: "#d97706", lineHeight: "1.5",
+                          }}>
+                            🔺 A estos pesos la técnica es lo primero. Si algo no se siente bien, baja el peso y repite la semana.
+                          </div>
+                        )}
+
+                        {semana.boNota && (
+                          <div style={{
+                            marginTop: "9px", padding: "9px 11px", background: "#1a1b1d",
+                            borderRadius: "6px", fontSize: "12px", color: "#9ca3af",
+                          }}>
+                            ⚠️ {semana.boNota}
+                          </div>
+                        )}
+
+                        {/* Bloc de notas */}
+                        <div style={{ marginTop: "13px" }}>
+                          <div style={{ fontSize: "10px", color: "#5a5f6b", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: "5px" }}>
+                            Notas
+                          </div>
+                          <textarea
+                            placeholder="RIR, sensaciones, ajustes..."
+                            value={notasSemanas[semana.semana] || ""}
+                            onChange={e => guardarNota(semana.semana, e.target.value)}
+                            rows={3}
+                            style={{
+                              width: "100%", padding: "10px 12px",
+                              background: "#0e0f10", border: "1px solid #2a2a2a",
+                              borderRadius: "8px", color: "#E8E6E1",
+                              fontSize: "13px", lineHeight: "1.5",
+                              resize: "none", outline: "none",
+                              boxSizing: "border-box", fontFamily: "inherit",
+                              caretColor: "#D94F3D",
+                            }}
+                          />
+                        </div>
+
+                        <button onClick={() => toggleSemana(semana.semana)} style={{
+                          marginTop: "10px", width: "100%", padding: "11px",
+                          background: "#0d1a0d", border: "1px solid #22c55e44",
+                          borderRadius: "8px", color: "#4ade80",
+                          fontSize: "13px", fontWeight: "700", cursor: "pointer",
+                        }}>
+                          ✓ Marcar como completada
+                        </button>
+                      </>
+                    ) : semana.esRM ? (
+                      <div style={{ paddingTop: "13px" }}>
+                        <div style={{
+                          padding: "14px", background: "#1a0a08", borderRadius: "8px",
+                          marginBottom: "12px", textAlign: "center", lineHeight: "1.6",
+                        }}>
+                          <div style={{ color: "#D94F3D", fontWeight: "800", fontSize: "16px", marginBottom: "6px" }}>
+                            🎯 Semana de máximo
+                          </div>
+                          <div style={{ fontSize: "13px", color: "#9ca3af" }}>
+                            Todo el bloque ha preparado este momento. Da lo mejor que tengas hoy.
+                          </div>
+                          <div style={{ marginTop: "9px", fontSize: "12px", color: "#d97706" }}>
+                            🔺 Calienta bien y no escatimes en series de aproximación. La técnica no negocia.
+                          </div>
+                        </div>
+                        <div style={{ marginTop: "13px" }}>
+                          <div style={{ fontSize: "10px", color: "#5a5f6b", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: "5px" }}>
+                            Notas
+                          </div>
+                          <textarea
+                            placeholder="Marca alcanzada, sensaciones, qué salió bien..."
+                            value={notasSemanas[semana.semana] || ""}
+                            onChange={e => guardarNota(semana.semana, e.target.value)}
+                            rows={3}
+                            style={{
+                              width: "100%", padding: "10px 12px",
+                              background: "#0e0f10", border: "1px solid #2a2a2a",
+                              borderRadius: "8px", color: "#E8E6E1",
+                              fontSize: "13px", lineHeight: "1.5",
+                              resize: "none", outline: "none",
+                              boxSizing: "border-box", fontFamily: "inherit",
+                              caretColor: "#D94F3D",
+                            }}
+                          />
+                        </div>
+
+                        <button onClick={() => toggleSemana(semana.semana)} style={{
+                          marginTop: "10px", width: "100%", padding: "11px",
+                          background: "#1a0a08", border: "1px solid #D94F3D44",
+                          borderRadius: "8px", color: "#D94F3D",
+                          fontSize: "13px", fontWeight: "700", cursor: "pointer",
+                        }}>
+                          ✓ Marcar como completada
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* Bloque completado */}
+          {completadas === totalSemanas && (
+            <div style={{
+              marginTop: "14px", padding: "20px", background: "#0d1a0d",
+              border: "1px solid #22c55e44", borderRadius: "12px", textAlign: "center", lineHeight: "1.7",
+            }}>
+              <div style={{ fontSize: "30px", marginBottom: "8px" }}>🏆</div>
+              <div style={{ fontWeight: "800", fontSize: "16px", color: "#4ade80", marginBottom: "6px" }}>
+                ¡Bloque completado!
+              </div>
+              <div style={{ fontSize: "13px", color: "#9ca3af", marginBottom: "14px" }}>
+                Has subido de <strong style={{ color: "#E8E6E1" }}>{formatPeso((parseFloat(rm) || 0), unidad)}</strong> a{" "}
+                <strong style={{ color: "#4ade80" }}>{formatPeso((parseFloat(objetivo) || 0), unidad)}</strong> en 16 semanas.
+                Tu nuevo punto de partida es <strong style={{ color: "#E8E6E1" }}>{formatPeso((parseFloat(objetivo) || 0), unidad)}</strong>.
+              </div>
+              <button onClick={reset} style={{
+                width: "100%", padding: "13px", background: "#22c55e", border: "none",
+                borderRadius: "9px", color: "white", fontWeight: "800", fontSize: "14px", cursor: "pointer",
+              }}>
+                Generar siguiente bloque →
+              </button>
+            </div>
+          )}
+
+          {/* Consejos por nivel */}
+          {completadas < totalSemanas && (() => {
+            const c = getConsejosNivel(nivel);
+            return (
+              <div style={{
+                marginTop: "14px", padding: "14px", background: "#16171a",
+                border: "1px solid #1e1f22", borderRadius: "10px",
+              }}>
+                <div style={{ fontSize: "10px", letterSpacing: "0.12em", textTransform: "uppercase", color: "#5a5f6b", marginBottom: "10px" }}>
+                  Recomendaciones · {c.titulo}
+                </div>
+                {c.consejos.map((consejo, i) => (
+                  <div key={i} style={{ display: "flex", gap: "9px", marginBottom: i < c.consejos.length - 1 ? "8px" : 0 }}>
+                    <div style={{ width: "5px", height: "5px", borderRadius: "50%", background: "#D94F3D", flexShrink: 0, marginTop: "6px" }} />
+                    <span style={{ fontSize: "12px", color: "#6b7280", lineHeight: "1.6" }}>{consejo}</span>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+
+          {/* Nota accesorios */}
+          <div style={{
+            marginTop: "10px", padding: "14px", background: "#16171a",
+            border: "1px solid #1e1f22", borderRadius: "10px",
+          }}>
+            <div style={{ fontSize: "10px", letterSpacing: "0.12em", textTransform: "uppercase", color: "#5a5f6b", marginBottom: "6px" }}>
+              Ejercicios accesorios
+            </div>
+            <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: "1.6" }}>
+              Esta herramienta programa únicamente el movimiento principal. Para los accesorios, mantén suficiente volumen para apoyar ese movimiento (aprox. 12–19 series semanales por grupo muscular) y deja unas 2 repeticiones en reserva en la mayoría de series.
+            </div>
+          </div>
+
+          {/* Exportar PDF — conectar pasarela de pago aquí */}
+          <div style={{
+            marginTop: "12px", padding: "14px", background: "#161718",
+            border: "1px solid #2a2a2a", borderRadius: "10px",
+          }}>
+            <div style={{ fontSize: "10px", letterSpacing: "0.12em", textTransform: "uppercase", color: "#3a3b3e", marginBottom: "8px" }}>
+              Exportar plan
+            </div>
+            <button
+              disabled
+              onClick={() => { /* TODO: conectar PayPal / Gumroad + generación PDF */ }}
+              style={{
+                width: "100%", padding: "13px",
+                background: "#1a1b1d", border: "1px solid #2a2a2a",
+                borderRadius: "9px", color: "#3a3b3e",
+                fontWeight: "700", fontSize: "14px",
+                cursor: "not-allowed", display: "flex",
+                alignItems: "center", justifyContent: "center", gap: "8px",
+              }}
+            >
+              <span>📄</span>
+              <span>Descargar plan en PDF</span>
+            </button>
+            <div style={{ fontSize: "11px", color: "#2e2e35", marginTop: "8px", textAlign: "center" }}>
+              Próximamente disponible
+            </div>
+          </div>
+
+          <button onClick={reset} style={{
+            marginTop: "12px", width: "100%", padding: "13px",
+            background: "transparent", border: "1px solid #2e2e35",
+            color: "#5a5f6b", borderRadius: "10px", cursor: "pointer", fontSize: "14px",
+          }}>
+            ← Nuevo plan
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
