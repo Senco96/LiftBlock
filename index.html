@@ -1,4 +1,4 @@
-    <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
@@ -246,7 +246,7 @@
 
       function usarEstimado() {
         if (estResultado) {
-          setRm(String(estResultado));
+          setRm(String(estResultado)); // ya está en la unidad activa del usuario
           setMostrarEstimador(false);
           setEstPeso(""); setEstReps(""); setEstResultado(null);
         }
@@ -259,7 +259,7 @@
         if (!ejNombre) { setError("Introduce el nombre del ejercicio."); return; }
         if (!rm || isNaN(rmNum) || rmNum <= 0) { setError("Introduce un 1RM actual válido."); return; }
         if (!objetivo || isNaN(objNum) || objNum <= rmNum) { setError("El objetivo debe ser mayor que tu 1RM actual."); return; }
-        if (objNum - rmNum > 21) { setError("El objetivo no puede superar +21 kg sobre tu 1RM actual."); return; }
+        if (objNum - rmNum > 21) { setError("El objetivo no puede superar +20 kg sobre tu 1RM actual."); return; }
         setError("");
         const nuevoProg = {
           id: Date.now(), ejercicio: ejNombre, rm: rmNum, objetivo: objNum, nivel,
@@ -270,6 +270,8 @@
         const lista = [nuevoProg, ...cargarProgramaciones()];
         guardarProgramaciones(lista); setProgramaciones(lista);
         setBloque(nuevoProg.bloque); setProgId(nuevoProg.id);
+        setRm(String(rmNum));       // desde aquí rm y objetivo viven en kg
+        setObjetivo(String(objNum));
         setSemanasCompletadas({}); setNotasSemanas({});
         setExpandida(null); setVista("bloque");
       }
@@ -596,10 +598,10 @@
                 <div>
                   <label style={labelStyle}>Objetivo ({unidad})</label>
                   <input type="text" inputMode="decimal"
-                    placeholder={rm ? String(parseFloat(rm) + (unidad === "lb" ? 11 : 5)) : (unidad === "lb" ? "220" : "105")}
+                    placeholder={rm ? String(Math.round(unidad === "lb" ? kgToLb(parseFloat(rm) + 5) : parseFloat(rm) + 5)) : (unidad === "lb" ? "220" : "105")}
                     value={objetivo} onChange={e => setObjetivo(e.target.value)} style={inputStyle} />
                   <div style={{ fontSize: "11px", color: "#3a3b3e", marginTop: "5px" }}>
-                    Introduce el valor en {unidad}. Máximo +21 kg por bloque.
+                    Introduce el valor en {unidad}. Máximo +20 kg por bloque.
                   </div>
                   {objetivo && rm && (() => { const diff = inputAKg(objetivo, unidad) - inputAKg(rm, unidad); return diff >= 10 && diff <= 21; })() && (
                     <div style={{ marginTop: "8px", padding: "9px 12px", background: "#1a1500", border: "1px solid #eab30833", borderRadius: "7px", fontSize: "12px", color: "#d97706", lineHeight: "1.5" }}>
